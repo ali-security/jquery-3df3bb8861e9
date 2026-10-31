@@ -2487,3 +2487,110 @@ asyncTest( "Sanitized HTML doesn't get unsanitized (CVE-2020-11022)", 27, functi
 		start();
 	}, 1000 );
 });
+
+// Support: IE <=9 only
+// IE <=9 replaces <option> tags with their contents when inserted outside of
+// the select element, so it still needs the <select> wrapper.
+function nativeOptionSupport() {
+	var div = document.createElement("div");
+	div.innerHTML = "<option></option>";
+	return !!div.lastChild;
+}
+
+test( "<option> & <optgroup> HTML is not parsed inside a <select> wrapper (CVE-2020-11023)", function() {
+
+	if ( !nativeOptionSupport() ) {
+		expect( 1 );
+		ok( true, "This browser needs the <select> wrapper for <option> elements" );
+		return;
+	}
+
+	expect( 12 );
+
+	var div,
+		nativeDiv = document.createElement("div");
+
+	function nodeNames( nodes ) {
+		return jQuery.map( nodes, function( node ) {
+			return node.nodeName.toLowerCase();
+		}).join(",");
+	}
+
+	// The markup a sanitizer approved in a regular container must not be able to
+	// close a <select> jQuery wraps it in and get re-parsed in another context.
+	jQuery.each( [
+		"<option>a</option></select><b>escaped</b>",
+		"<optgroup label='g'><option>a</option></optgroup></select><b>escaped</b>"
+	], function( i, html ) {
+		var tag = html.substring( 1, html.search( /[ >]/ ) );
+
+		nativeDiv.innerHTML = html;
+
+		equal( nodeNames( jQuery.parseHTML( html ) ), tag + ",b",
+			"jQuery.parseHTML() keeps every top-level node: " + html );
+
+		div = jQuery("<div></div>").html( html );
+		equal( div.html().toLowerCase(), nativeDiv.innerHTML.toLowerCase(),
+			".html() parses the markup like the browser does: " + html );
+		equal( div.find("select").length, 0, ".html() leaves no <select> wrapper: " + html );
+
+		div = jQuery("<div></div>").append( html );
+		equal( div.html().toLowerCase(), nativeDiv.innerHTML.toLowerCase(),
+			".append() parses the markup like the browser does: " + html );
+		equal( div.find("select").length, 0, ".append() leaves no <select> wrapper: " + html );
+
+		equal( nodeNames( jQuery( html ) ), tag + ",b",
+			"jQuery( html ) keeps every top-level node: " + html );
+	});
+});
+
+asyncTest( "Sanitized <option> HTML doesn't get unsanitized (CVE-2020-11023)", 13, function() {
+
+	var container,
+		executed = [],
+		counter = 0,
+		optionSupport = nativeOptionSupport(),
+
+		// Thanks to Masato Kinugawa from Cure53 for providing the original test case.
+		// "{id}" is replaced with a unique number per insertion.
+		templates = [
+			"<option><style></option></select><img src=url404 onerror=xss({id})></style>",
+			"<optgroup><style></optgroup></select><img src=url404 onerror=xss({id})></style>"
+		];
+
+	Globals.register("xss");
+	window.xss = function( id ) {
+		executed.push( id );
+	};
+
+	container = jQuery("<div></div>").appendTo("#qunit-fixture");
+
+	// Cover every code path that consults the <option> wrapper:
+	// .html() (innerHTML shortcut), .append() and jQuery( html ) (jQuery.buildFragment)
+	jQuery.each( [ "html", "append", "jQuery" ], function( i, method ) {
+		jQuery.each( templates, function( j, template ) {
+			var htmlString = template.replace( "{id}", counter++ ),
+				div = jQuery("<div></div>").appendTo( container );
+
+			if ( method === "jQuery" ) {
+				div.append( jQuery( htmlString ) );
+			} else {
+				div[ method ]( htmlString );
+			}
+
+			equal( div.find("[onerror]").length, 0,
+				method + "() does not turn sanitized text into markup: " + htmlString );
+			if ( optionSupport ) {
+				equal( div.find("style").length, 1,
+					method + "() keeps the <style> element and its text: " + htmlString );
+			} else {
+				ok( true, "This browser needs the <select> wrapper for <option> elements" );
+			}
+		});
+	});
+
+	setTimeout(function() {
+		deepEqual( executed, [], "Insecure code wasn't executed" );
+		start();
+	}, 1000 );
+});
